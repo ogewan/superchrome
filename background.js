@@ -3,6 +3,46 @@
  * Manages state and communication between popup and content scripts
  */
 
+let clickTimers = 0;
+let timerCallback;
+let windowMap = {};
+let tabUrlMap = {};
+let tabMap = {};
+let dupeMap = {};
+
+// onActivated, onAttahed, onCreated, onRemoved
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  console.log('activated');
+  updateBadge(activeInfo.tabId, activeInfo.windowId);
+});
+chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
+  console.log('attached');
+  addTab(tabId, attachInfo.newWindowId);
+});
+chrome.tabs.onDetached.addListener((tabId, detachInfo) => {
+  console.log('detached');
+  removeTab(tabId, detachInfo.oldWindowId);
+});
+chrome.tabs.onCreated.addListener((tab) => {
+  console.log('created');
+  // tab object not fully initialized yet; url may be missing
+  addTab(tab.id, tab.windowId, true);
+  // update badge because active tab is not guaranteed to change
+  updateBadge(tab.id, tab.windowId);
+});
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  console.log('removed');
+  removeTab(tabId, removeInfo.windowId, true);
+  // update badge because active tab is not guaranteed to change
+  updateBadge(tabId, removeInfo.windowId);
+});
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  console.log('updated');
+  updateTab(changeInfo.url, tab.url, tabId);
+  updateBadge(tabId, tab.windowId);
+  // console.dir(`tab:${tabId} changeInfo: ${JSON.stringify(changeInfo)}`);
+});
+
 // Initialize with default tool on first install
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get(['activeTool'], (result) => {
@@ -13,8 +53,6 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-let clickTimers = 0;
-let timerCallback;
 chrome.action.onClicked.addListener(async (tab) => {
   // If this is the second click within 300ms, treat as double-click
   if (clickTimers && Date.now() - clickTimers < 300) {
@@ -65,51 +103,88 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-chrome.tabs.onActivated.addListener(updateBadge);
-chrome.tabs.onAttached.addListener(updateBadge);
-chrome.tabs.onDetached.addListener(updateBadge);
-chrome.tabs.onCreated.addListener(updateBadge);
-chrome.tabs.onRemoved.addListener(updateBadge);
-chrome.tabs.onUpdated.addListener(updateBadge);
-chrome.windows.onFocusChanged.addListener(updateBadge);
+function addHelper(url, tabId) {
+  if (!url) return;
+  if (tabMap[url]) {
+    dupeMap[url] = [...(dupeMap[url] || []), tabId];
+  } else {
+    tabMap[url] = true;
+  }
+  // set or update the url for this tab
+  tabUrlMap[tabId] = url;
+}
+async function addTab(tabId, windowId, added = false, initUrl = null) {
+  if (!windowMap[windowId]) {
+    windowMap[windowId] = 0;
+  }
+  windowMap[windowId] += 1;
 
-async function updateBadge() {
-  // need to cache this since this is fairly expensive to do frequently
-  let windowTabs = await chrome.tabs.query({currentWindow: true});
+  if (added) {
+    const url = initUrl || (await chrome.tabs.get(tabId)).url;
+    addHelper(url, tabId);
+  }
+}
 
-  // Group tabs by URL
-  const urlGroups = {};
-  let duplicateFound = false;
-  let activeTab = null;
-
-  for (const tab of windowTabs) {
-    if (tab.url && !tab.url.startsWith('chrome://') &&
-        !tab.url.startsWith('chrome-extension://')) {
-      if (!urlGroups[tab.url]) {
-        urlGroups[tab.url] = [];
-      } else {
-        duplicateFound = true;
-      }
+function removeHelper(url, tabId) {
+  if (!url) return;
+  if (dupeMap[url]) {
+    dupeMap[url] = dupeMap[url].filter(id => id !== tabId);
+    if (dupeMap[url].length === 0) {
+      delete dupeMap[url];
     }
-    if (tab.highlighted) {
-      activeTab = tab;
+  } else {
+    delete tabMap[url];
+  }
+}
+async function removeTab(tabId, windowId, removed = false) {
+  if (windowMap[windowId]) {
+    windowMap[windowId] -= 1;
+
+    if (removed) {
+      removeHelper((tabUrlMap[tabId]), tabId);
+      // remove tab from tabUrlMap, this is not done in updateTab since it still
+      // exists
+      delete tabUrlMap[tabId];
+    }
+  }
+}
+
+function updateTab(oldUrl, newUrl, tabId) {
+  if (oldUrl && newUrl && oldUrl !== newUrl) {
+    removeHelper(oldUrl, tabId);
+    addHelper(newUrl, tabId);
+  }
+}
+
+async function updateBadge(tabId, windowId) {
+  console.log('Super Tool: Updating badge', tabId, windowId);
+  // need to cache this since this is fairly expensive to do frequently
+
+  if (!windowMap[windowId]) {
+    let windowTabs = await chrome.tabs.query({currentWindow: true});
+
+    for (const tab of windowTabs) {
+      addTab(tab.id, windowId, true, tab.url);
     }
   }
 
-  chrome.action.setBadgeText({
-    text: windowTabs.length > 0 ? `${windowTabs.length}` : '',
-    tabId: activeTab ? activeTab.id : null
-  });
-  chrome.action.setBadgeBackgroundColor({
-    color: duplicateFound ? '#FF4444' : '#4444FF',
-    tabId: activeTab ? activeTab.id : null
-  });
+  console.log(`window ${windowId} has ${windowMap[windowId]} tabs on tab ${
+      tabId} w/ dupe count ${Object.keys(dupeMap).length}`);
+  chrome.action.setBadgeText({text: `${windowMap[windowId] || ''}`, tabId});
+  chrome.action.setBadgeBackgroundColor(
+      {color: Object.keys(dupeMap).length ? '#FF4444' : '#4444FF', tabId});
+}
+
+function setIcon(tool) {
+  const iconDataUri = iconMap[tool] || iconMap['default'];
+  chrome.action.setIcon({imageData: iconDataUri});
 }
 
 function handleToolActivation(tool) {
   // Handle tool activation
   console.log(`Super Tool: Activating tool ${tool}`);
 
+  setIcon(tool);
   // Tool-specific activation logic will be implemented here
   switch (tool) {
     case 'get-urls':
@@ -141,9 +216,22 @@ function activateOpenUrls() {
   // TODO: Implement open-urls functionality
 }
 
-function activateRemoveDupes() {
+async function activateRemoveDupes() {
+  let duplicatesRemoved = 0;
   console.log('Remove Duplicates tool activated');
   // TODO: Implement remove-dupes functionality
+  let dupeTabs = Object.values(dupeMap).flat();
+  console.log(`Duplicate tabs to remove: ${dupeTabs}`);
+  for (const tabId of dupeTabs) {
+    try {
+      await chrome.tabs.remove(tabId);
+      duplicatesRemoved++;
+    } catch (error) {
+      console.error(`Failed to remove tab ${tabId}:`, error);
+    }
+  }
+  console.log(
+      `Removed ${duplicatesRemoved} of ${dupeTabs.length} duplicate tabs.`);
 }
 
 function activatePartitionTabs() {
@@ -157,9 +245,18 @@ function activateMemoryManager() {
 }
 
 // Listen for tab changes and update extension icon if needed
-chrome.tabs.onActivated.addListener((activeInfo) => {
+/*chrome.tabs.onActivated.addListener((activeInfo) => {
   console.log('Super Tool: Tab activated', activeInfo.tabId);
-});
+});*/
 
 // Handle any errors
 chrome.runtime.lastError;
+
+// stores icons; method name to icon data uri
+const iconMap = {
+  'default': ``,
+  'urls-manager': ``,
+  'remove-dupes': ``,
+  'partition-tabs': ``,
+  'memory-manager': ``
+};
