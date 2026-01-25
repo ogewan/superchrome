@@ -47,8 +47,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get(['activeTool'], (result) => {
     if (!result.activeTool) {
-      chrome.storage.local.set({activeTool: 'get-urls'});
-      console.log('Super Tool: Initialized with default tool: get-urls');
+      chrome.storage.local.set({activeTool: 'urls-manager'});
+      console.log('Super Tool: Initialized with default tool: urls-manager');
     }
   });
 });
@@ -59,7 +59,7 @@ chrome.action.onClicked.addListener(async (tab) => {
     clearTimeout(timerCallback);
     let activeTool = await chrome.storage.local.get(['activeTool'])
                          .then(result => result.activeTool) ||
-        'get-urls';
+        'urls-manager';
     handleToolActivation(activeTool);
     clickTimers = 0;
     return;
@@ -91,7 +91,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === 'getActiveTool') {
     chrome.storage.local.get(['activeTool'], (result) => {
-      sendResponse({activeTool: result.activeTool || 'get-urls'});
+      sendResponse({activeTool: result.activeTool || 'urls-manager'});
     });
     return true;  // Keep the message channel open for async response
   }
@@ -187,11 +187,8 @@ function handleToolActivation(tool) {
   setIcon(tool);
   // Tool-specific activation logic will be implemented here
   switch (tool) {
-    case 'get-urls':
-      activateGetUrls();
-      break;
-    case 'open-urls':
-      activateOpenUrls();
+    case 'urls-manager':
+      activateUrlsManager();
       break;
     case 'remove-dupes':
       activateRemoveDupes();
@@ -206,14 +203,9 @@ function handleToolActivation(tool) {
 }
 
 // Tool activation functions (placeholder implementations)
-function activateGetUrls() {
-  console.log('Get URLs tool activated');
-  // TODO: Implement get-urls functionality
-}
-
-function activateOpenUrls() {
-  console.log('Open URLs tool activated');
-  // TODO: Implement open-urls functionality
+function activateUrlsManager() {
+  console.log('URLs Manager tool activated');
+  // TODO: Implement urls-manager functionality
 }
 
 async function activateRemoveDupes() {
