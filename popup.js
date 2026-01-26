@@ -4,14 +4,14 @@
  */
 
 const toolMap = {
-  'get-urls': 'icon-get-urls',
+  'urls-manager': 'icon-urls-manager',
   'open-urls': 'icon-open-urls',
   'remove-dupes': 'icon-remove-dupes',
   'partition-tabs': 'icon-partition-tabs',
   'memory-manager': 'icon-memory-manager'
 };
 
-let currentActiveTool = 'get-urls';
+let currentActiveTool = 'urls-manager';
 
 /**
  * Initialize popup on load
@@ -26,7 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
  */
 function loadActiveTool() {
   chrome.runtime.sendMessage({action: 'getActiveTool'}, (response) => {
-    currentActiveTool = response.activeTool || 'get-urls';
+    currentActiveTool = response.activeTool || 'urls-manager';
     updateActiveIcon();
   });
 }

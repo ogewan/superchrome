@@ -3,12 +3,32 @@
  * Manages state and communication between popup and content scripts
  */
 
+import {icons as iconMap, imageDataFromDataUriWorker} from './icons.js';
+
+let iconSet = false;
 let clickTimers = 0;
 let timerCallback;
-let windowMap = {};
-let tabUrlMap = {};
-let tabMap = {};
-let dupeMap = {};
+const windowMap = {};
+const tabUrlMap = {};
+const tabMap = {};
+const dupeMap = {};
+
+// Preload icon image data
+const iconImageData = {};
+const iconImageDataReady = (async () => {
+  for (const [tool, dataUri] of Object.entries(iconMap)) {
+    iconImageData[tool] = await imageDataFromDataUriWorker(dataUri);
+  }
+})();
+
+globalThis = {
+  ...globalThis,
+  windowMap,
+  tabUrlMap,
+  tabMap,
+  dupeMap,
+  iconImageData
+};
 
 // onActivated, onAttahed, onCreated, onRemoved
 chrome.tabs.onActivated.addListener((activeInfo) => {
@@ -103,6 +123,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
+// Initial setup
+(() => {
+  console.log('Super Tool: Background service worker initialized');
+  updateBadge();
+})();
+
 function addHelper(url, tabId) {
   if (!url) return;
   if (tabMap[url]) {
@@ -160,24 +186,34 @@ async function updateBadge(tabId, windowId) {
   console.log('Super Tool: Updating badge', tabId, windowId);
   // need to cache this since this is fairly expensive to do frequently
 
-  if (!windowMap[windowId]) {
+  if (!tabId || !windowMap[windowId]) {
     let windowTabs = await chrome.tabs.query({currentWindow: true});
 
     for (const tab of windowTabs) {
-      addTab(tab.id, windowId, true, tab.url);
+      if (!tabId && tab.active) {
+        tabId = tab.id;
+        windowId = tab.windowId;
+      }
+      addTab(tab.id, windowId || tab.windowId, true, tab.url);
     }
   }
 
   console.log(`window ${windowId} has ${windowMap[windowId]} tabs on tab ${
       tabId} w/ dupe count ${Object.keys(dupeMap).length}`);
+  if (!iconSet) {
+    setIcon('default');
+    iconSet = true;
+  }
   chrome.action.setBadgeText({text: `${windowMap[windowId] || ''}`, tabId});
   chrome.action.setBadgeBackgroundColor(
       {color: Object.keys(dupeMap).length ? '#FF4444' : '#4444FF', tabId});
 }
 
-function setIcon(tool) {
-  const iconDataUri = iconMap[tool] || iconMap['default'];
-  chrome.action.setIcon({imageData: iconDataUri});
+async function setIcon(tool) {
+  await iconImageDataReady;
+  const imageData = iconImageData[tool] || iconImageData['default'];
+  if (!imageData) return;
+  chrome.action.setIcon({imageData});
 }
 
 function handleToolActivation(tool) {
@@ -243,17 +279,3 @@ function activateMemoryManager() {
 
 // Handle any errors
 chrome.runtime.lastError;
-
-// stores icons; method name to icon data uri
-const iconMap = {
-  'default':
-      `data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgdmlld0JveD0iMCAwIDEyOCAxMjgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJhZGlhbEdyYWRpZW50IGlkPSJiZzEiIGN4PSI0MCUiIGN5PSI0MCUiIHI9IjYwJSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzY4YjBlZiIgc3RvcC1vcGFjaXR5PSIxIi8+PHN0b3Agb2Zmc2V0PSIxMDAlIiBzdG9wLWNvbG9yPSIjMDc3ZGU2IiBzdG9wLW9wYWNpdHk9IjEiLz48L3JhZGlhbEdyYWRpZW50PjxjaXJjbGUgY3g9IjY0IiBjeT0iNjQiIHI9IjU4IiBmaWxsPSJ1cmwoI2JnMSkiLz48Y2lyY2xlIGN4PSI2NCIgY3k9IjY0IiByPSI1NCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjIiIG9wYWNpdHk9IjAuMyIvPjxjaXJjbGUgY3g9IjY0IiBjeT0iNjQiIHI9IjMyIiBmaWxsPSIjZWVlZWVlIi8+PGNpcmNsZSBjeD0iNDgiIGN5PSI0OCIgcj0iMTgiIGZpbGw9IiNmZjZjMDAiLz48Y2lyY2xlIGN4PSI4MCIgY3k9IjQ4IiByPSIxOCIgZmlsbD0iIzAwYTg2YiIvPjxjaXJjbGUgY3g9IjY0IiBjeT0iNjgiIHI9IjE4IiBmaWxsPSIjZGEzYjAxIi8+PC9zdmc+`,
-  'urls-manager':
-      `data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgdmlld0JveD0iMCAwIDEyOCAxMjgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHJhZGlhbEdyYWRpZW50IGlkPSJnMSIgY3g9IjQwJSIgY3k9IjQwJSIgcj0iNjAlIj48c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjNjhiMGVmIiBzdG9wLW9wYWNpdHk9IjEiLz48c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiMwNzdhZTYiIHN0b3Atb3BhY2l0eT0iMSIvPjwvcmFkaWFsR3JhZGllbnQ+PC9kZWZzPjxyZWN0IHg9IjI0IiB5PSIyNCIgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSJ1cmwoI2cxKSIgcng9IjgiIHJ5PSI4Ii8+PHJlY3QgeD0iMjQiIHk9IjI0IiB3aWR0aD0iODAiIGhlaWdodD0iODAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjMiIHJ4PSI4IiByeT0iOCIvPjxsaW5lIHgxPSIzNiIgeTE9IjQyIiB4Mj0iOTIiIHkyPSI0MiIgc3Ryb2tlPSIjZWVlZWVlIiBzdHJva2Utd2lkdGg9IjYiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxsaW5lIHgxPSIzNiIgeTE9IjU4IiB4Mj0iOTIiIHkyPSI1OCIgc3Ryb2tlPSIjZWVlZWVlIiBzdHJva2Utd2lkdGg9IjYiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxsaW5lIHgxPSIzNiIgeTE9Ijc0IiB4Mj0iOTIiIHkyPSI3NCIgc3Ryb2tlPSIjZWVlZWVlIiBzdHJva2Utd2lkdGg9IjYiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvc3ZnPg==`,
-  'remove-dupes':
-      `data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgdmlld0JveD0iMCAwIDEyOCAxMjgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHJhZGlhbEdyYWRpZW50IGlkPSJnMiIgY3g9IjQwJSIgY3k9IjQwJSIgcj0iNjAlIj48c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjNjhiMGVmIiBzdG9wLW9wYWNpdHk9IjEiLz48c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiMwNzdhZTYiIHN0b3Atb3BhY2l0eT0iMSIvPjwvcmFkaWFsR3JhZGllbnQ+PC9kZWZzPjxyZWN0IHg9IjI0IiB5PSIyNCIgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSJ1cmwoI2cyKSIgcng9IjgiIHJ5PSI4Ii8+PHJlY3QgeD0iMjQiIHk9IjI0IiB3aWR0aD0iODAiIGhlaWdodD0iODAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjMiIHJ4PSI4IiByeT0iOCIvPjxwYXRoIGQ9Ik0gNDAgNDAgTCA4OCA4OCIgc3Ryb2tlPSIjZWY0NDQ0IiBzdHJva2Utd2lkdGg9IjQiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxwYXRoIGQ9Ik0gODggNDAgTCA0MCA4OCIgc3Ryb2tlPSIjZWY0NDQ0IiBzdHJva2Utd2lkdGg9IjQiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvc3ZnPg==`,
-  'partition-tabs':
-      `data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgdmlld0JveD0iMCAwIDEyOCAxMjgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHJhZGlhbEdyYWRpZW50IGlkPSJnMyIgY3g9IjQwJSIgY3k9IjQwJSIgcj0iNjAlIj48c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjNjhiMGVmIiBzdG9wLW9wYWNpdHk9IjEiLz48c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiMwNzdhZTYiIHN0b3Atb3BhY2l0eT0iMSIvPjwvcmFkaWFsR3JhZGllbnQ+PC9kZWZzPjxyZWN0IHg9IjI0IiB5PSIyNCIgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSJ1cmwoI2czKSIgcng9IjgiIHJ5PSI4Ii8+PHJlY3QgeD0iMjQiIHk9IjI0IiB3aWR0aD0iODAiIGhlaWdodD0iODAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjMiIHJ4PSI4IiByeT0iOCIvPjxyZWN0IHg9IjMwIiB5PSIzMCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI4IiBmaWxsPSIjZWVlZWVlIiBvcGFjaXR5PSIwLjciIHJ4PSIzIi8+PHJlY3QgeD0iNjAiIHk9IjMwIiB3aWR0aD0iMjgiIGhlaWdodD0iMjgiIGZpbGw9IiNlZWVlZWUiIG9wYWNpdHk9IjAuNSIgcng9IjMiLz48cmVjdCB4PSIzMCIgeT0iNjQiIHdpZHRoPSIyOCIgaGVpZ2h0PSIyOCIgZmlsbD0iI2VlZWVlZSIgb3BhY2l0eT0iMC41IiByeD0iMyIvPjxyZWN0IHg9IjY0IiB5PSI2NCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI4IiBmaWxsPSIjZWVlZWVlIiBvcGFjaXR5PSIwLjciIHJ4PSIzIi8+PC9zdmc+`,
-  'memory-manager':
-      `data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgdmlld0JveD0iMCAwIDEyOCAxMjgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHJhZGlhbEdyYWRpZW50IGlkPSJnNCIgY3g9IjQwJSIgY3k9IjQwJSIgcj0iNjAlIj48c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjNjhiMGVmIiBzdG9wLW9wYWNpdHk9IjEiLz48c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiMwNzdhZTYiIHN0b3Atb3BhY2l0eT0iMSIvPjwvcmFkaWFsR3JhZGllbnQ+PC9kZWZzPjxyZWN0IHg9IjI0IiB5PSIyNCIgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSJ1cmwoI2c0KSIgcng9IjgiIHJ5PSI4Ii8+PHJlY3QgeD0iMjQiIHk9IjI0IiB3aWR0aD0iODAiIGhlaWdodD0iODAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIwLjMiIHJ4PSI4IiByeT0iOCIvPjxyZWN0IHg9IjM0IiB5PSI0MCIgd2lkdGg9IjEwIiBoZWlnaHQ9IjMyIiBmaWxsPSIjZWVlZWVlIiByeD0iMiIvPjxyZWN0IHg9IjUwIiB5PSI0MCIgd2lkdGg9IjEwIiBoZWlnaHQ9IjQ0IiBmaWxsPSIjZWVlZWVlIiByeD0iMiIvPjxyZWN0IHg9IjY2IiB5PSI0MCIgd2lkdGg9IjEwIiBoZWlnaHQ9IjM4IiBmaWxsPSIjZWVlZWVlIiByeD0iMiIvPjxyZWN0IHg9IjgyIiB5PSI0MCIgd2lkdGg9IjEwIiBoZWlnaHQ9IjI4IiBmaWxsPSIjZWVlZWVlIiByeD0iMiIvPjwvc3ZnPg==`
-};
