@@ -5,10 +5,10 @@
 
 import {icons as iconMap, imageDataFromDataUriWorker} from './icons.js';
 
-let iconSet = false;
 let clickTimers = 0;
 let timerCallback;
 const windowMap = {};
+const windowActiveTabMap = {};
 const tabUrlMap = {};
 const tabMap = {};
 const dupeMap = {};
@@ -27,13 +27,15 @@ globalThis = {
   tabUrlMap,
   tabMap,
   dupeMap,
-  iconImageData
+  iconImageData,
+  windowActiveTabMap
 };
 
 // onActivated, onAttahed, onCreated, onRemoved
 chrome.tabs.onActivated.addListener((activeInfo) => {
   console.log('activated');
-  updateBadge(activeInfo.tabId, activeInfo.windowId);
+  windowActiveTabMap[activeInfo.windowId] = activeInfo.tabId;
+  updateBadge(activeInfo.windowId);
 });
 chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
   console.log('attached');
@@ -48,19 +50,37 @@ chrome.tabs.onCreated.addListener((tab) => {
   // tab object not fully initialized yet; url may be missing
   addTab(tab.id, tab.windowId, true);
   // update badge because active tab is not guaranteed to change
-  updateBadge(tab.id, tab.windowId);
+  updateBadge(tab.windowId);
 });
 chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   console.log('removed');
   removeTab(tabId, removeInfo.windowId, true);
-  // update badge because active tab is not guaranteed to change
-  updateBadge(tabId, removeInfo.windowId);
+  // update badge because active tab is not guaranteed to change (do not update
+  // if the removed tab is the active tab)
+  if (windowActiveTabMap[removeInfo.windowId] !== tabId)
+    updateBadge(removeInfo.windowId);
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   console.log('updated');
   updateTab(changeInfo.url, tab.url, tabId);
-  updateBadge(tabId, tab.windowId);
+  updateBadge(tab.windowId);
   // console.dir(`tab:${tabId} changeInfo: ${JSON.stringify(changeInfo)}`);
+});
+chrome.windows.onRemoved.addListener((windowId) => {
+  console.log('window removed');
+  // Clean up windowMap
+  delete windowMap[windowId];
+  delete windowActiveTabMap[windowId];
+});
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  console.log('window focus changed');
+  // Update badge for the active tab in the focused window
+  if (windowId && windowId !== chrome.windows.WINDOW_ID_NONE) {
+    if (!windowActiveTabMap[windowId]) {
+      initializeWindow(windowId);
+    }
+    updateBadge(windowId);
+  }
 });
 
 // Initialize with default tool on first install
@@ -124,9 +144,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // Initial setup
-(() => {
+(async () => {
   console.log('Super Tool: Background service worker initialized');
-  updateBadge();
+  setIcon('default');
+  const windowId = await initializeWindow();
+  updateBadge(windowId);
 })();
 
 function addHelper(url, tabId) {
@@ -146,8 +168,12 @@ async function addTab(tabId, windowId, added = false, initUrl = null) {
   windowMap[windowId] += 1;
 
   if (added) {
-    const url = initUrl || (await chrome.tabs.get(tabId)).url;
-    addHelper(url, tabId);
+    try {
+      const url = initUrl || (await chrome.tabs.get(tabId)).url;
+      addHelper(url, tabId);
+    } catch (error) {
+      console.error(`Failed to get tab ${tabId}:`, error);
+    }
   }
 }
 
@@ -182,31 +208,35 @@ function updateTab(oldUrl, newUrl, tabId) {
   }
 }
 
-async function updateBadge(tabId, windowId) {
-  console.log('Super Tool: Updating badge', tabId, windowId);
-  // need to cache this since this is fairly expensive to do frequently
-
-  if (!tabId || !windowMap[windowId]) {
+async function initializeWindow(initWinId) {
+  let windowId = initWinId || (await chrome.windows.getCurrent()).id;
+  let activeTab = windowActiveTabMap[windowId];
+  if (!windowMap[windowId]) {
     let windowTabs = await chrome.tabs.query({currentWindow: true});
 
     for (const tab of windowTabs) {
-      if (!tabId && tab.active) {
-        tabId = tab.id;
+      if (!activeTab && tab.active) {
+        activeTab = tab.id;
         windowId = tab.windowId;
+        windowActiveTabMap[windowId] = activeTab;
       }
       addTab(tab.id, windowId || tab.windowId, true, tab.url);
     }
   }
+  return windowId;
+}
 
-  console.log(`window ${windowId} has ${windowMap[windowId]} tabs on tab ${
-      tabId} w/ dupe count ${Object.keys(dupeMap).length}`);
-  if (!iconSet) {
-    setIcon('default');
-    iconSet = true;
+async function updateBadge(windowId) {
+  let activeTab = windowActiveTabMap[windowId];
+  let windowCount = windowMap[windowId];
+  if (activeTab && windowCount) {
+    chrome.action.setBadgeText(
+        {text: `${windowCount || ''}`, tabId: activeTab});
+    chrome.action.setBadgeBackgroundColor({
+      color: Object.keys(dupeMap).length ? '#FF4444' : '#4444FF',
+      tabId: activeTab
+    });
   }
-  chrome.action.setBadgeText({text: `${windowMap[windowId] || ''}`, tabId});
-  chrome.action.setBadgeBackgroundColor(
-      {color: Object.keys(dupeMap).length ? '#FF4444' : '#4444FF', tabId});
 }
 
 async function setIcon(tool) {
@@ -271,11 +301,6 @@ function activateMemoryManager() {
   console.log('Memory Manager tool activated');
   // TODO: Implement memory-manager functionality
 }
-
-// Listen for tab changes and update extension icon if needed
-/*chrome.tabs.onActivated.addListener((activeInfo) => {
-  console.log('Super Tool: Tab activated', activeInfo.tabId);
-});*/
 
 // Handle any errors
 chrome.runtime.lastError;
