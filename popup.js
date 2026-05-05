@@ -75,6 +75,13 @@ function handleDoubleClick(tool) {
       {action: 'activateTool', tool: tool}, (response) => {
         if (response.success) {
           console.log(`Tool activated: ${tool}`);
+
+          if (tool === 'urls-manager') {
+            // Expand into the URL manager dialog inside the popup window.
+            window.location.replace('urls-dialog.html');
+            return;
+          }
+
           // Close popup after tool activation
           setTimeout(() => {
             window.close();

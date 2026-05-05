@@ -5,6 +5,7 @@
   "description": "A powerful tab and browser management tool",
   "permissions": [
     "tabs",
+    "tabGroups",
     "activeTab",
     "storage",
     "system.memory",

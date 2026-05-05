@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Tool - URLs Manager</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f2f4f8;
+            --panel: #ffffff;
+            --text: #1f2733;
+            --muted: #5c6675;
+            --border: #d9dee8;
+            --accent: #2463eb;
+            --accent-strong: #1a4bc4;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(160deg, #f7f9fc, #eef2f8);
+            color: var(--text);
+            width: 520px;
+            min-height: 520px;
+            padding: 12px;
+        }
+
+        .panel {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 12px;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1);
+            min-height: 496px;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            justify-content: space-between;
+        }
+
+        .header h1 {
+            font-size: 18px;
+            margin: 0;
+            font-weight: 600;
+        }
+
+        #output {
+            flex: 1;
+            width: 100%;
+            min-height: 330px;
+            resize: vertical;
+            padding: 10px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: #fbfcff;
+            font-family: Consolas, 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            color: #0f172a;
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px 12px;
+        }
+
+        .controls label {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            color: var(--muted);
+            font-size: 12px;
+            user-select: none;
+        }
+
+        button {
+            border: 1px solid var(--border);
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 7px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            color: #111827;
+        }
+
+        button:hover {
+            background: #f4f6fb;
+        }
+
+        button.primary {
+            border-color: transparent;
+            background: var(--accent);
+            color: #ffffff;
+        }
+
+        button.primary:hover {
+            background: var(--accent-strong);
+        }
+
+        button.text-btn {
+            border: none;
+            background: transparent;
+            color: var(--accent-strong);
+            padding: 2px 0;
+        }
+
+        button.text-btn:hover {
+            background: transparent;
+            text-decoration: underline;
+        }
+
+        .controls .spacer {
+            flex: 1;
+            min-width: 10px;
+        }
+
+        #status {
+            margin: 0;
+            min-height: 18px;
+            font-size: 12px;
+            color: #1f5d2f;
+        }
+    </style>
+</head>
+
+<body>
+    <main class="panel">
+        <div class="header">
+            <button id="btn-back" class="text-btn" type="button">&larr; Back</button>
+            <h1>Get / Open URLs</h1>
+        </div>
+
+        <textarea id="output" spellcheck="false" aria-label="Exported tab URLs" readonly></textarea>
+
+        <div class="controls">
+            <label><input type="checkbox" id="cb-title"> Title</label>
+            <label><input type="checkbox" id="cb-allwindows"> All Windows</label>
+            <label><input type="checkbox" id="cb-groups" checked> Groups</label>
+            <label><input type="checkbox" id="cb-locked" checked> Locked</label>
+            <div class="spacer"></div>
+            <button id="btn-copy" type="button">Copy</button>
+            <button id="btn-open" type="button" class="primary">Open</button>
+        </div>
+
+        <p id="status" role="status" aria-live="polite"></p>
+    </main>
+
+    <script src="urls-dialog.js"></script>
+</body>
+
+</html>

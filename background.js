@@ -72,15 +72,21 @@ chrome.windows.onRemoved.addListener((windowId) => {
   delete windowMap[windowId];
   delete windowActiveTabMap[windowId];
 });
-chrome.windows.onFocusChanged.addListener((windowId) => {
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
   console.log('window focus changed');
   // Update badge for the active tab in the focused window
+  ///* temporarily till the double count bug fixed
   if (windowId && windowId !== chrome.windows.WINDOW_ID_NONE) {
-    if (!windowActiveTabMap[windowId]) {
-      initializeWindow(windowId);
+    if (!windowActiveTabMap[windowId] || !windowMap[windowId]) {
+      try {
+        await initializeWindow(windowId);
+      } catch (error) {
+        console.warn(`Failed to initialize focused window ${windowId}:`, error);
+        return;
+      }
     }
     updateBadge(windowId);
-  }
+  }  //*/
 });
 
 // Initialize with default tool on first install
@@ -208,20 +214,59 @@ function updateTab(oldUrl, newUrl, tabId) {
   }
 }
 
+const initializationTable = {};
+
 async function initializeWindow(initWinId) {
-  let windowId = initWinId || (await chrome.windows.getCurrent()).id;
+  let windowId = initWinId;
+  if (!windowId) {
+    windowId =
+        (await chrome.windows.getLastFocused({windowTypes: ['normal']})).id;
+  }
+
+  if (initializationTable[windowId]) {
+    console.log(`window ${windowId} already initialized, skipping`);
+    return windowId;
+  }
+
+  // Lock immediately to avoid duplicate initialization from rapid focus events.
+  initializationTable[windowId] = true;
+
   let activeTab = windowActiveTabMap[windowId];
+
   if (!windowMap[windowId]) {
-    let windowTabs = await chrome.tabs.query({currentWindow: true});
+    let windowTabs = [];
+    try {
+      windowTabs = await chrome.tabs.query({windowId: windowId});
+    } catch (error) {
+      // The window may have been closed between focus change and query.
+      delete initializationTable[windowId];
+      throw error;
+    }
+    console.log(`initialized window ${windowId} (${initWinId}) with ${
+        windowTabs.length} tabs`);
 
     for (const tab of windowTabs) {
       if (!activeTab && tab.active) {
         activeTab = tab.id;
-        windowId = tab.windowId;
-        windowActiveTabMap[windowId] = activeTab;
+        windowActiveTabMap[tab.windowId] = activeTab;
       }
-      addTab(tab.id, windowId || tab.windowId, true, tab.url);
+      addTab(tab.id, tab.windowId, true, tab.url);
     }
+  } else {
+    if (!activeTab) {
+      try {
+        const [tab] =
+            await chrome.tabs.query({windowId: windowId, active: true});
+        if (tab?.id) {
+          windowActiveTabMap[windowId] = tab.id;
+        }
+      } catch (error) {
+        console.warn(
+            `Failed to refresh active tab for window ${windowId}:`, error);
+      }
+    }
+    console.log(`initialized window ${windowId} (${
+        initWinId}) already tracked with ${windowMap[windowId]} tabs`);
   }
   return windowId;
 }
@@ -269,16 +314,33 @@ function handleToolActivation(tool) {
 }
 
 // Tool activation functions (placeholder implementations)
-function activateUrlsManager() {
+async function activateUrlsManager() {
   console.log('URLs Manager tool activated');
-  // TODO: Implement urls-manager functionality
+  // URL export/open behavior is implemented in urls-dialog.html.
 }
 
 async function activateRemoveDupes() {
   let duplicatesRemoved = 0;
   console.log('Remove Duplicates tool activated');
-  // TODO: Implement remove-dupes functionality
-  let dupeTabs = Object.values(dupeMap).flat();
+
+  const allTabs = await chrome.tabs.query({});
+  allTabs.sort((a, b) => (a.windowId - b.windowId) || (a.index - b.index));
+
+  const seenUrls = new Map();
+  const dupeTabs = [];
+
+  for (const tab of allTabs) {
+    const url = (tab.url || '').trim();
+    if (!url) continue;
+
+    if (!seenUrls.has(url)) {
+      seenUrls.set(url, tab.id);
+      continue;
+    }
+
+    dupeTabs.push(tab.id);
+  }
+
   console.log(`Duplicate tabs to remove: ${dupeTabs}`);
   for (const tabId of dupeTabs) {
     try {
@@ -288,13 +350,43 @@ async function activateRemoveDupes() {
       console.error(`Failed to remove tab ${tabId}:`, error);
     }
   }
+
+  // Rebuild duplicate tracking after removals to keep badge color accurate.
+  const remainingTabs = await chrome.tabs.query({});
+  for (const key of Object.keys(tabMap)) delete tabMap[key];
+  for (const key of Object.keys(dupeMap)) delete dupeMap[key];
+  for (const key of Object.keys(tabUrlMap)) delete tabUrlMap[key];
+  for (const tab of remainingTabs) {
+    addHelper(tab.url, tab.id);
+  }
+
+  for (const windowId of Object.keys(windowActiveTabMap)) {
+    updateBadge(Number(windowId));
+  }
+
   console.log(
       `Removed ${duplicatesRemoved} of ${dupeTabs.length} duplicate tabs.`);
 }
 
 function activatePartitionTabs() {
   console.log('Partition Tabs tool activated');
-  // TODO: Implement partition-tabs functionality
+  // simple partition: move half of tabs to a new window
+  chrome.windows.getLastFocused({populate: true}).then((currentWindow) => {
+    const isIncognito = currentWindow.incognito;
+    const tabs = currentWindow.tabs || [];
+    const half = Math.floor(tabs.length / 2);
+    const tabsToMove = tabs.slice(0, half).map(tab => tab.id);
+    if (tabsToMove.length > 0) {
+      chrome.windows.create({tabId: tabsToMove[0], incognito: isIncognito})
+          .then((newWindow) => {
+            if (tabsToMove.length > 1) {
+              chrome.tabs.move(
+                  tabsToMove.slice(1), {windowId: newWindow.id, index: -1});
+            }
+          });
+    }
+  });
+  // TODO: Implement full partition-tabs functionality
 }
 
 function activateMemoryManager() {
