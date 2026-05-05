@@ -8,7 +8,8 @@ const toolMap = {
   'open-urls': 'icon-open-urls',
   'remove-dupes': 'icon-remove-dupes',
   'partition-tabs': 'icon-partition-tabs',
-  'memory-manager': 'icon-memory-manager'
+  'memory-manager': 'icon-memory-manager',
+  'group-control': 'icon-group-control'
 };
 
 let currentActiveTool = 'urls-manager';
@@ -79,6 +80,11 @@ function handleDoubleClick(tool) {
           if (tool === 'urls-manager') {
             // Expand into the URL manager dialog inside the popup window.
             window.location.replace('urls-dialog.html');
+            return;
+          }
+
+          if (tool === 'group-control') {
+            window.location.replace('groups-dialog.html');
             return;
           }
 

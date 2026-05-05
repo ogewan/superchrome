@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Group Control Panel</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      min-width: 720px;
+      min-height: 540px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      padding: 10px 14px;
+      background: #fff;
+      border-bottom: 1px solid #dde1ea;
+      gap: 10px;
+    }
+    .btn-back {
+      background: none;
+      border: 1px solid #c0c6d4;
+      border-radius: 6px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #555;
+    }
+    .btn-back:hover { background: #f0f2f5; }
+    .header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      flex: 1;
+      text-align: center;
+      color: #1a1a2e;
+    }
+
+    /* ── Merge config bar ── */
+    .merge-config {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 8px 14px;
+      background: #fff;
+      border-bottom: 1px solid #dde1ea;
+      font-size: 12px;
+      flex-wrap: wrap;
+    }
+    .merge-config label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    .merge-config input[type="radio"] { cursor: pointer; }
+    .merge-config-label { font-weight: 600; color: #444; white-space: nowrap; }
+    .custom-fields {
+      display: none;
+      align-items: center;
+      gap: 6px;
+    }
+    .custom-fields.visible { display: flex; }
+    .custom-fields input[type="text"] {
+      border: 1px solid #c0c6d4;
+      border-radius: 4px;
+      padding: 3px 7px;
+      font-size: 12px;
+      width: 110px;
+    }
+    .color-swatches {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+    }
+    .color-swatch {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: border-color 0.15s;
+    }
+    .color-swatch.selected { border-color: #333; }
+
+    /* ── Table area ── */
+    .table-wrapper {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 14px;
+      max-height: calc(100vh - 200px);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    thead th {
+      background: #f5f7fa;
+      font-weight: 600;
+      padding: 8px 10px;
+      text-align: left;
+      font-size: 12px;
+      color: #555;
+      border-bottom: 1px solid #dde1ea;
+      white-space: nowrap;
+      user-select: none;
+    }
+    thead th:first-child { width: 32px; text-align: center; }
+    tbody tr.group-row { cursor: default; }
+    tbody tr.group-row:hover { background: #f9fafc; }
+    tbody tr.group-row td {
+      padding: 7px 10px;
+      border-bottom: 1px solid #f0f2f5;
+      vertical-align: middle;
+    }
+    tbody tr.group-row td:first-child { text-align: center; }
+
+    /* ── Tab sub-rows ── */
+    tbody tr.tab-row { background: #fafbfc; }
+    tbody tr.tab-row td {
+      padding: 5px 10px 5px 40px;
+      font-size: 12px;
+      color: #555;
+      border-bottom: 1px solid #f5f7fa;
+    }
+    tbody tr.tab-row.hidden { display: none; }
+    tbody tr.tab-row td.tab-check { text-align: center; padding-left: 10px; width: 32px; }
+    tbody tr.tab-row td.tab-title {
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    tbody tr.tab-row td.tab-url {
+      max-width: 250px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #888;
+    }
+
+    /* ── Color chip ── */
+    .color-chip {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      cursor: pointer;
+      vertical-align: middle;
+      border: 1px solid rgba(0,0,0,0.1);
+    }
+
+    /* ── Group name cell ── */
+    .group-name {
+      max-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 500;
+    }
+    .group-name.unnamed { font-style: italic; color: #888; }
+    .group-name-input {
+      border: 1px solid #4a90e2;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 13px;
+      width: 150px;
+    }
+
+    /* ── Expand toggle ── */
+    .expand-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0 4px;
+      font-size: 11px;
+      color: #666;
+    }
+    .expand-btn:hover { color: #333; }
+
+    /* ── Row delete button ── */
+    .btn-row-delete {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #cc3333;
+      font-size: 14px;
+      padding: 0 4px;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    tbody tr.group-row:hover .btn-row-delete { opacity: 1; }
+
+    /* ── Action bar ── */
+    .action-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: #fff;
+      border-top: 1px solid #dde1ea;
+      flex-wrap: wrap;
+    }
+    .btn {
+      padding: 5px 13px;
+      border-radius: 6px;
+      border: 1px solid #c0c6d4;
+      background: #fff;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      color: #333;
+      transition: background 0.15s;
+    }
+    .btn:hover:not(:disabled) { background: #f0f2f5; }
+    .btn:disabled { opacity: 0.4; cursor: default; }
+    .btn.primary {
+      background: #4a90e2;
+      border-color: #3a7bd5;
+      color: #fff;
+    }
+    .btn.primary:hover:not(:disabled) { background: #3a7bd5; }
+    .btn.danger {
+      color: #cc3333;
+      border-color: #e0a0a0;
+    }
+    .btn.danger:hover:not(:disabled) { background: #fff0f0; }
+
+    /* ── Status line ── */
+    .status-line {
+      font-size: 12px;
+      color: #666;
+      flex: 1;
+      text-align: right;
+    }
+    .status-line.success { color: #2a7a2a; }
+    .status-line.error { color: #cc3333; }
+
+    /* ── Split confirm bar ── */
+    .split-confirm-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      background: #fffbeb;
+      border-bottom: 1px solid #f0e080;
+      font-size: 12px;
+    }
+    .split-confirm-bar.visible { display: flex; }
+    .split-confirm-bar input[type="text"] {
+      border: 1px solid #c0c6d4;
+      border-radius: 4px;
+      padding: 3px 7px;
+      font-size: 12px;
+      width: 120px;
+    }
+
+    /* ── Color picker popup ── */
+    .color-picker-popup {
+      display: none;
+      position: absolute;
+      background: #fff;
+      border: 1px solid #dde1ea;
+      border-radius: 8px;
+      padding: 8px;
+      gap: 6px;
+      flex-wrap: wrap;
+      width: 120px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      z-index: 100;
+    }
+    .color-picker-popup.visible {
+      display: flex;
+    }
+
+    /* ── Empty state ── */
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: #aaa;
+      font-size: 13px;
+    }
+
+    /* ── Window column ── */
+    .window-label {
+      font-size: 11px;
+      color: #777;
+      white-space: nowrap;
+    }
+
+    /* ── Age ── */
+    .age-label {
+      font-size: 11px;
+      color: #777;
+      white-space: nowrap;
+    }
+
+    /* ── Confirm overlay (bulk delete) ── */
+    .confirm-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.3);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+    }
+    .confirm-overlay.visible { display: flex; }
+    .confirm-box {
+      background: #fff;
+      border-radius: 10px;
+      padding: 24px 28px;
+      max-width: 340px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+    }
+    .confirm-box p { margin-bottom: 16px; font-size: 13px; line-height: 1.5; }
+    .confirm-box .btn-row {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    /* ── Move to dropdown ── */
+    select.move-select {
+      border: 1px solid #c0c6d4;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      background: #fff;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <button class="btn-back" id="btn-back">← Back</button>
+    <h1>Group Control Panel</h1>
+  </div>
+
+  <!-- Merge mode config -->
+  <div class="merge-config">
+    <span class="merge-config-label">Merge mode:</span>
+    <label title="Use the name and color of the first-selected group">
+      <input type="radio" name="merge-mode" value="first" checked> First selected
+    </label>
+    <label title="Use the name and color of the largest group (most tabs)">
+      <input type="radio" name="merge-mode" value="largest"> Largest
+    </label>
+    <label title="Specify a custom name and color for the merged group">
+      <input type="radio" name="merge-mode" value="custom"> Custom
+    </label>
+    <div class="custom-fields" id="custom-fields">
+      <input type="text" id="custom-name" placeholder="Group name" maxlength="64">
+      <div class="color-swatches" id="custom-color-swatches"></div>
+    </div>
+  </div>
+
+  <!-- Split confirm bar -->
+  <div class="split-confirm-bar" id="split-confirm-bar">
+    <span>New group name:</span>
+    <input type="text" id="split-name" placeholder="Group name" maxlength="64">
+    <div class="color-swatches" id="split-color-swatches"></div>
+    <button class="btn primary" id="btn-split-confirm">Confirm Split</button>
+    <button class="btn" id="btn-split-cancel">Cancel</button>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrapper">
+    <div class="empty-state" id="empty-state" style="display:none">No tab groups found.</div>
+    <table id="groups-table">
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="select-all" title="Select all groups"></th>
+          <th>Color</th>
+          <th>Name</th>
+          <th>Window</th>
+          <th>Age</th>
+          <th>Tabs</th>
+          <th title="Collapsed / Expanded">↕</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="groups-body"></tbody>
+    </table>
+  </div>
+
+  <!-- Action bar -->
+  <div class="action-bar">
+    <button class="btn" id="btn-merge" disabled title="Select 2+ groups to merge">Merge</button>
+    <button class="btn" id="btn-split" disabled title="Select exactly 1 group, then expand it to choose tabs">Split</button>
+    <button class="btn danger" id="btn-delete" disabled>Delete</button>
+    <select class="move-select" id="move-select" disabled title="Move selected groups to another window">
+      <option value="">Move to…</option>
+    </select>
+    <button class="btn" id="btn-export">Export</button>
+    <label class="btn" id="btn-import-label" style="cursor:pointer">
+      Import
+      <input type="file" id="btn-import" accept=".txt" style="display:none">
+    </label>
+    <span class="status-line" id="status"></span>
+  </div>
+
+  <!-- Bulk-delete confirm overlay -->
+  <div class="confirm-overlay" id="confirm-overlay">
+    <div class="confirm-box">
+      <p id="confirm-msg">Delete selected groups? Tabs will be ungrouped but not closed.</p>
+      <div class="btn-row">
+        <button class="btn" id="confirm-cancel">Cancel</button>
+        <button class="btn danger" id="confirm-ok">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Color picker popup (shared) -->
+  <div class="color-picker-popup" id="color-picker-popup"></div>
+
+  <script src="groups-dialog.js"></script>
+</body>
+</html>

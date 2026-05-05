@@ -19,6 +19,21 @@ const iconImageDataReady = (async () => {
   for (const [tool, dataUri] of Object.entries(iconMap)) {
     iconImageData[tool] = await imageDataFromDataUriWorker(dataUri);
   }
+  // Generate group-control icon: three colored bars on a dark rounded background
+  const size = 128;
+  const canvas = new OffscreenCanvas(size, size);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#1e1e2e';
+  ctx.beginPath();
+  ctx.roundRect(0, 0, size, size, 16);
+  ctx.fill();
+  for (const [i, color] of ['#4688f1', '#3dba4e', '#e8453c'].entries()) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(12, 18 + i * 34, 104, 22, 5);
+    ctx.fill();
+  }
+  iconImageData['group-control'] = ctx.getImageData(0, 0, size, size);
 })();
 
 globalThis = {
@@ -68,9 +83,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 chrome.windows.onRemoved.addListener((windowId) => {
   console.log('window removed');
-  // Clean up windowMap
   delete windowMap[windowId];
   delete windowActiveTabMap[windowId];
+  delete initializationTable[windowId];
 });
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   console.log('window focus changed');
@@ -245,12 +260,20 @@ async function initializeWindow(initWinId) {
     console.log(`initialized window ${windowId} (${initWinId}) with ${
         windowTabs.length} tabs`);
 
+    // Set count directly from query result to avoid double-counting with
+    // onCreated events that may have already incremented windowMap during the
+    // async query. Only call addHelper (not addTab) for URL tracking, and skip
+    // tabs already tracked by racing event handlers.
+    windowMap[windowId] = 0;
     for (const tab of windowTabs) {
       if (!activeTab && tab.active) {
         activeTab = tab.id;
         windowActiveTabMap[tab.windowId] = activeTab;
       }
-      addTab(tab.id, tab.windowId, true, tab.url);
+      windowMap[tab.windowId] = (windowMap[tab.windowId] || 0) + 1;
+      if (!tabUrlMap[tab.id]) {
+        addHelper(tab.url, tab.id);
+      }
     }
   } else {
     if (!activeTab) {
@@ -310,13 +333,18 @@ function handleToolActivation(tool) {
     case 'memory-manager':
       activateMemoryManager();
       break;
+    case 'group-control':
+      activateGroupControlPanel();
+      break;
   }
 }
 
 // Tool activation functions (placeholder implementations)
 async function activateUrlsManager() {
   console.log('URLs Manager tool activated');
-  // URL export/open behavior is implemented in urls-dialog.html.
+  chrome.action.setPopup({popup: 'urls-dialog.html'});
+  chrome.action.openPopup();
+  chrome.action.setPopup({popup: ''});
 }
 
 async function activateRemoveDupes() {
@@ -392,6 +420,13 @@ function activatePartitionTabs() {
 function activateMemoryManager() {
   console.log('Memory Manager tool activated');
   // TODO: Implement memory-manager functionality
+}
+
+async function activateGroupControlPanel() {
+  console.log('Group Control Panel activated');
+  chrome.action.setPopup({popup: 'groups-dialog.html'});
+  chrome.action.openPopup();
+  chrome.action.setPopup({popup: ''});
 }
 
 // Handle any errors
