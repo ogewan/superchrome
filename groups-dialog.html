@@ -326,6 +326,103 @@
       justify-content: flex-end;
     }
 
+    /* ── Create-group overlay ── */
+    .creategroup-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.3);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+    }
+    .creategroup-overlay.visible { display: flex; }
+    .creategroup-box {
+      background: #fff;
+      border-radius: 10px;
+      padding: 20px 22px;
+      width: 560px;
+      max-width: 92vw;
+      max-height: 86vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+    }
+    .creategroup-box h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+    .cg-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #eef1f6;
+      margin-bottom: 10px;
+    }
+    .cg-controls input[type="text"] {
+      border: 1px solid #c0c6d4;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 12px;
+      width: 140px;
+    }
+    .cg-target-label { font-size: 12px; color: #444; display: flex; align-items: center; gap: 6px; }
+    .tab-pick-list {
+      flex: 1;
+      overflow-y: auto;
+      max-height: 320px;
+      border: 1px solid #eef1f6;
+      border-radius: 6px;
+    }
+    .cg-window-head {
+      background: #f5f7fa;
+      font-size: 11px;
+      font-weight: 600;
+      color: #666;
+      padding: 5px 10px;
+      position: sticky;
+      top: 0;
+      border-bottom: 1px solid #e3e8f0;
+    }
+    .cg-tab-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 10px;
+      font-size: 12px;
+      border-bottom: 1px solid #f5f7fa;
+      cursor: pointer;
+    }
+    .cg-tab-row:hover { background: #f9fafc; }
+    .cg-tab-row input[type="checkbox"] { cursor: pointer; flex-shrink: 0; }
+    .cg-tab-title {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .cg-group-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      color: #888;
+      flex-shrink: 0;
+    }
+    .cg-group-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      border: 1px solid rgba(0,0,0,0.1);
+    }
+    .creategroup-box .btn-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 14px;
+    }
+    .creategroup-box .btn-row .status-line { text-align: left; }
+
     /* ── Move to dropdown ── */
     select.move-select {
       border: 1px solid #c0c6d4;
@@ -393,9 +490,11 @@
 
   <!-- Action bar -->
   <div class="action-bar">
+    <button class="btn" id="btn-new-group" title="Create a new group from hand-picked tabs across any windows">+ New Group</button>
     <button class="btn" id="btn-merge" disabled title="Select 2+ groups to merge">Merge</button>
     <button class="btn" id="btn-split" disabled title="Select exactly 1 group, then expand it to choose tabs">Split</button>
     <button class="btn danger" id="btn-delete" disabled>Delete</button>
+    <button class="btn" id="btn-suspend" disabled title="Unload all tabs in the selected groups (frees memory; tabs reload when reopened)">Suspend</button>
     <select class="move-select" id="move-select" disabled title="Move selected groups to another window">
       <option value="">Move to…</option>
     </select>
@@ -414,6 +513,26 @@
       <div class="btn-row">
         <button class="btn" id="confirm-cancel">Cancel</button>
         <button class="btn danger" id="confirm-ok">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create-group-from-tabs overlay -->
+  <div class="creategroup-overlay" id="creategroup-overlay">
+    <div class="creategroup-box">
+      <h2>Create group from tabs</h2>
+      <div class="cg-controls">
+        <input type="text" id="cg-name" placeholder="Group name" maxlength="64">
+        <div class="color-swatches" id="cg-color-swatches"></div>
+        <label class="cg-target-label">Target window:
+          <select class="move-select" id="cg-target"></select>
+        </label>
+      </div>
+      <div class="tab-pick-list" id="cg-tab-list"></div>
+      <div class="btn-row">
+        <span class="status-line" id="cg-status"></span>
+        <button class="btn" id="cg-cancel">Cancel</button>
+        <button class="btn primary" id="cg-create" disabled>Create Group</button>
       </div>
     </div>
   </div>

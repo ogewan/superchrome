@@ -26,6 +26,8 @@ let groupAges = {};        // {groupId: timestampMs}
 let splitGroupId = null;   // group being split (null = not in split mode)
 let colorPickerTarget = null; // {type: 'custom'|'split'|'row', groupId?, resolve?}
 let pendingDeleteIds = [];
+let cgTabs = [];               // create-group: flat list of {id, title, windowId, groupId, active}
+let cgTargetUserPicked = false; // true once the user manually changes the target dropdown
 
 const $ = id => document.getElementById(id);
 
@@ -34,6 +36,7 @@ const $ = id => document.getElementById(id);
 document.addEventListener('DOMContentLoaded', async () => {
   buildColorSwatches('custom-color-swatches', 'grey');
   buildColorSwatches('split-color-swatches', 'blue');
+  buildColorSwatches('cg-color-swatches', 'grey');
   bindStaticEvents();
   await loadData();
   renderTable();
@@ -174,6 +177,7 @@ function updateActionBar() {
 
   $('btn-merge').disabled = count < 2 || isSplitting;
   $('btn-delete').disabled = count === 0 || isSplitting;
+  $('btn-suspend').disabled = count === 0 || isSplitting;
   $('move-select').disabled = count === 0 || isSplitting;
 
   // Split: exactly 1 group checked and NOT already splitting
@@ -223,8 +227,17 @@ function bindStaticEvents() {
   // Delete button
   $('btn-delete').addEventListener('click', onBulkDelete);
 
+  // Suspend button
+  $('btn-suspend').addEventListener('click', onSuspend);
+
   // Move to window
   $('move-select').addEventListener('change', onMoveToWindow);
+
+  // Create group from tabs
+  $('btn-new-group').addEventListener('click', openCreateGroup);
+  $('cg-cancel').addEventListener('click', closeCreateGroup);
+  $('cg-create').addEventListener('click', onCreateGroup);
+  $('cg-target').addEventListener('change', () => { cgTargetUserPicked = true; });
 
   // Export
   $('btn-export').addEventListener('click', onExport);
@@ -513,6 +526,40 @@ async function doDelete(ids) {
   renderTable();
 }
 
+// ── Suspend ──────────────────────────────────────────────────────────────────
+
+async function onSuspend() {
+  const ids = getCheckedGroupIds();
+  if (ids.length === 0) return;
+
+  // Collect discardable tabs: skip each window's active tab (discard rejects on
+  // it) and tabs that are already discarded.
+  const tabIds = [];
+  for (const id of ids) {
+    const entry = allGroups.find(g => g.group.id === id);
+    if (!entry) continue;
+    for (const tab of entry.tabs) {
+      if (tab.active || tab.discarded) continue;
+      tabIds.push(tab.id);
+    }
+  }
+
+  if (tabIds.length === 0) {
+    setStatus('Nothing to suspend (tabs are active or already suspended).', true);
+    return;
+  }
+
+  // Per-tab catch so one failure doesn't abort the batch.
+  const results = await Promise.all(
+    tabIds.map(id => chrome.tabs.discard(id).then(() => true).catch(() => false))
+  );
+  const suspended = results.filter(Boolean).length;
+
+  setStatus(`Suspended ${suspended} tab${suspended !== 1 ? 's' : ''} in ${ids.length} group${ids.length !== 1 ? 's' : ''}.`);
+  await loadData();
+  renderTable();
+}
+
 // ── Move to window ────────────────────────────────────────────────────────────
 
 async function onMoveToWindow() {
@@ -547,6 +594,143 @@ async function onMoveToWindow() {
   setStatus(`Moved ${ids.length} group${ids.length > 1 ? 's' : ''} to window.`);
   await loadData();
   renderTable();
+}
+
+// ── Create group from tabs ────────────────────────────────────────────────────
+
+async function openCreateGroup() {
+  cgTargetUserPicked = false;
+  $('cg-name').value = '';
+  buildColorSwatches('cg-color-swatches', 'grey');
+  $('cg-status').textContent = '';
+
+  // Fresh query so the picker reflects current windows/tabs.
+  const [windows, tabs] = await Promise.all([
+    chrome.windows.getAll({ populate: false }),
+    chrome.tabs.query({})
+  ]);
+
+  // Same "Window N" numbering as the main table (loadData).
+  const winMap = {};
+  windows.forEach((w, i) => { winMap[w.id] = `Window ${i + 1}`; });
+
+  cgTabs = tabs
+    .filter(t => winMap[t.windowId]) // normal windows only
+    .map(t => ({
+      id: t.id,
+      title: t.title || t.url || '(untitled)',
+      windowId: t.windowId,
+      groupId: t.groupId,
+      active: t.active
+    }));
+
+  // Map groupId → {title, color} for in-group badges.
+  const groupMeta = {};
+  allGroups.forEach(({ group }) => {
+    groupMeta[group.id] = { title: group.title, color: group.color };
+  });
+
+  // Target window dropdown.
+  const target = $('cg-target');
+  target.innerHTML = '';
+  windows.forEach((w, i) => {
+    const opt = document.createElement('option');
+    opt.value = w.id;
+    opt.textContent = `Window ${i + 1}`;
+    target.appendChild(opt);
+  });
+
+  // Render tab list grouped by window.
+  const list = $('cg-tab-list');
+  list.innerHTML = '';
+  windows.forEach((w, i) => {
+    const winTabs = cgTabs.filter(t => t.windowId === w.id);
+    if (winTabs.length === 0) return;
+
+    const head = document.createElement('div');
+    head.className = 'cg-window-head';
+    head.textContent = `Window ${i + 1} (${winTabs.length} tab${winTabs.length !== 1 ? 's' : ''})`;
+    list.appendChild(head);
+
+    winTabs.forEach(t => {
+      const row = document.createElement('label');
+      row.className = 'cg-tab-row';
+      const meta = t.groupId !== -1 ? groupMeta[t.groupId] : null;
+      const badge = meta
+        ? `<span class="cg-group-badge"><span class="cg-group-dot" style="background:${COLOR_CSS[meta.color] || '#ccc'}"></span>${escHtml(meta.title || 'in group')}</span>`
+        : '';
+      row.innerHTML = `
+        <input type="checkbox" class="cg-check" data-tab-id="${t.id}" data-window-id="${t.windowId}">
+        <span class="cg-tab-title" title="${escHtml(t.title)}">${escHtml(t.title)}</span>
+        ${badge}
+      `;
+      list.appendChild(row);
+    });
+  });
+
+  list.querySelectorAll('.cg-check').forEach(cb => {
+    cb.addEventListener('change', updateCreateGroupState);
+  });
+
+  updateCreateGroupState();
+  $('creategroup-overlay').classList.add('visible');
+}
+
+function updateCreateGroupState() {
+  const checked = [...document.querySelectorAll('.cg-check:checked')];
+  $('cg-create').disabled = checked.length === 0;
+
+  // Auto-default the target to the window with the most selected tabs,
+  // unless the user has manually overridden it.
+  if (!cgTargetUserPicked && checked.length > 0) {
+    const counts = {};
+    checked.forEach(cb => {
+      const wid = cb.dataset.windowId;
+      counts[wid] = (counts[wid] || 0) + 1;
+    });
+    const best = Object.keys(counts).reduce((a, b) => counts[b] > counts[a] ? b : a);
+    $('cg-target').value = best;
+  }
+}
+
+async function onCreateGroup() {
+  const ids = [...document.querySelectorAll('.cg-check:checked')]
+    .map(cb => Number(cb.dataset.tabId));
+  if (ids.length === 0) {
+    $('cg-status').textContent = 'Select at least one tab.';
+    $('cg-status').className = 'status-line error';
+    return;
+  }
+
+  const target = Number($('cg-target').value);
+  if (!target) {
+    $('cg-status').textContent = 'Pick a target window.';
+    $('cg-status').className = 'status-line error';
+    return;
+  }
+
+  // Move each selected tab into the target window so they share one window,
+  // then group them (mirrors the move→group pattern in onMoveToWindow).
+  for (const id of ids) {
+    await chrome.tabs.move(id, { windowId: target, index: -1 });
+  }
+  const gId = await chrome.tabs.group({ tabIds: ids, createProperties: { windowId: target } });
+  await chrome.tabGroups.update(gId, {
+    title: $('cg-name').value.trim() || undefined,
+    color: getSelectedSwatch('cg-color-swatches')
+  });
+
+  closeCreateGroup();
+  setStatus(`Created group from ${ids.length} tab${ids.length !== 1 ? 's' : ''}.`);
+  await loadData();
+  renderTable();
+}
+
+function closeCreateGroup() {
+  $('creategroup-overlay').classList.remove('visible');
+  $('cg-tab-list').innerHTML = '';
+  cgTabs = [];
+  cgTargetUserPicked = false;
 }
 
 // ── Export ───────────────────────────────────────────────────────────────────
