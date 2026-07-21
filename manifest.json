@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "SuperChrome",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "A powerful tab and browser management tool",
   "permissions": [
     "tabs",
     "tabGroups",
     "activeTab",
     "storage",
+    "notifications",
     "system.memory",
     "processes"
   ],

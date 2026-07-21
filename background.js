@@ -307,6 +307,42 @@ async function updateBadge(windowId) {
   }
 }
 
+let badgeFlashTimer = null;
+
+// Temporarily overrides the per-window count badge with the removal tally.
+// If the service worker is torn down before the restore fires, the next tab
+// event calls updateBadge anyway.
+function flashRemovalBadge(count) {
+  if (badgeFlashTimer) clearTimeout(badgeFlashTimer);
+  const windowIds = Object.keys(windowActiveTabMap);
+  for (const windowId of windowIds) {
+    const tabId = windowActiveTabMap[windowId];
+    if (!tabId) continue;
+    chrome.action.setBadgeText({text: `-${count}`, tabId});
+    chrome.action.setBadgeBackgroundColor({color: '#FF8800', tabId});
+  }
+  badgeFlashTimer = setTimeout(() => {
+    badgeFlashTimer = null;
+    for (const windowId of windowIds) updateBadge(Number(windowId));
+  }, 2500);
+}
+
+function notifyRemoval(count, pinnedDupesKept) {
+  let message =
+      count ? `Removed ${count} duplicate tab${count === 1 ? '' : 's'}.` :
+              'No duplicate tabs found.';
+  if (pinnedDupesKept) {
+    message += ` ${pinnedDupesKept} pinned duplicate${
+        pinnedDupesKept === 1 ? '' : 's'} left in place.`;
+  }
+  chrome.notifications.create({
+    type: 'basic',
+    title: 'SuperChrome',
+    iconUrl: iconMap['remove-dupes'],
+    message
+  });
+}
+
 async function setIcon(tool) {
   await iconImageDataReady;
   const imageData = iconImageData[tool] || iconImageData['default'];
@@ -347,26 +383,66 @@ async function activateUrlsManager() {
   chrome.action.setPopup({popup: ''});
 }
 
+// Survivor precedence within a set of exact-URL duplicates, most significant
+// first. Higher score wins. groupId is compared against -1 rather than
+// chrome.tabGroups.TAB_GROUP_ID_NONE so this doesn't depend on the tabGroups
+// namespace being live in the worker.
+function survivorScore(tab, windowTabCounts) {
+  return [
+    tab.active ? 1 : 0,
+    tab.groupId > -1 ? 1 : 0,
+    tab.id,                          // ids are monotonic: higher = newer
+    -(windowTabCounts[tab.windowId] || 0),  // fewer tabs in window wins
+  ];
+}
+
 async function activateRemoveDupes() {
   let duplicatesRemoved = 0;
+  let pinnedDupesKept = 0;
   console.log('Remove Duplicates tool activated');
 
   const allTabs = await chrome.tabs.query({});
-  allTabs.sort((a, b) => (a.windowId - b.windowId) || (a.index - b.index));
 
-  const seenUrls = new Map();
-  const dupeTabs = [];
-
+  // Snapshot window sizes up front so the tiebreaker stays stable as tabs are
+  // removed.
+  const windowTabCounts = {};
   for (const tab of allTabs) {
-    const url = (tab.url || '').trim();
-    if (!url) continue;
+    windowTabCounts[tab.windowId] = (windowTabCounts[tab.windowId] || 0) + 1;
+  }
 
-    if (!seenUrls.has(url)) {
-      seenUrls.set(url, tab.id);
+  // pendingUrl covers tabs still loading or discarded, which report an empty
+  // url and used to be skipped entirely.
+  const byUrl = new Map();
+  for (const tab of allTabs) {
+    const url = (tab.url || tab.pendingUrl || '').trim();
+    if (!url) continue;
+    byUrl.set(url, [...(byUrl.get(url) || []), tab]);
+  }
+
+  const dupeTabs = [];
+  for (const tabs of byUrl.values()) {
+    if (tabs.length < 2) continue;
+
+    const pinned = tabs.filter(tab => tab.pinned);
+    if (pinned.length) {
+      // Pinned tabs are never removed, so a URL pinned more than once keeps
+      // more than one instance.
+      if (pinned.length > 1) pinnedDupesKept += pinned.length - 1;
+      for (const tab of tabs) {
+        if (!tab.pinned) dupeTabs.push(tab.id);
+      }
       continue;
     }
 
-    dupeTabs.push(tab.id);
+    const ranked = [...tabs].sort((a, b) => {
+      const scoreA = survivorScore(a, windowTabCounts);
+      const scoreB = survivorScore(b, windowTabCounts);
+      for (let i = 0; i < scoreA.length; i++) {
+        if (scoreA[i] !== scoreB[i]) return scoreB[i] - scoreA[i];
+      }
+      return 0;
+    });
+    for (const tab of ranked.slice(1)) dupeTabs.push(tab.id);
   }
 
   console.log(`Duplicate tabs to remove: ${dupeTabs}`);
@@ -394,6 +470,9 @@ async function activateRemoveDupes() {
 
   console.log(
       `Removed ${duplicatesRemoved} of ${dupeTabs.length} duplicate tabs.`);
+
+  flashRemovalBadge(duplicatesRemoved);
+  notifyRemoval(duplicatesRemoved, pinnedDupesKept);
 }
 
 function activatePartitionTabs() {
