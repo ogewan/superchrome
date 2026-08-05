@@ -432,6 +432,136 @@
       background: #fff;
       cursor: pointer;
     }
+    select.move-select:disabled { opacity: 0.5; cursor: default; }
+
+    /* ── View toggle (Groups | Windows) ── */
+    .view-toggle {
+      display: flex;
+      border: 1px solid #c0c6d4;
+      border-radius: 6px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .view-tab {
+      background: #fff;
+      border: none;
+      padding: 5px 13px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #555;
+      cursor: pointer;
+    }
+    .view-tab + .view-tab { border-left: 1px solid #c0c6d4; }
+    .view-tab:hover:not(.active) { background: #f0f2f5; }
+    .view-tab.active { background: #4a90e2; color: #fff; }
+
+    .view { display: none; }
+    .view.visible { display: block; }
+
+    /* ── Windows table ── */
+    tbody tr.window-row:hover { background: #f9fafc; }
+    tbody tr.window-row td {
+      padding: 7px 10px;
+      border-bottom: 1px solid #f0f2f5;
+      vertical-align: middle;
+    }
+    tbody tr.window-row td:first-child { text-align: center; }
+    tbody tr.window-row.incognito td { background: #f6f5fa; }
+
+    .window-title {
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .window-title:hover { color: #3a7bd5; text-decoration: underline; }
+    .incognito-badge {
+      display: inline-block;
+      font-size: 10px;
+      background: #40424a;
+      color: #fff;
+      border-radius: 3px;
+      padding: 1px 5px;
+      margin-left: 6px;
+      white-space: nowrap;
+    }
+    .focused-badge { font-size: 11px; color: #d19a00; margin-left: 6px; }
+
+    /* ── Window sub-rows (groups + tabs) ── */
+    tbody tr.win-sub-row { background: #fafbfc; }
+    tbody tr.win-sub-row td {
+      padding: 5px 10px 5px 40px;
+      font-size: 12px;
+      color: #555;
+      border-bottom: 1px solid #f5f7fa;
+    }
+    tbody tr.win-sub-row td.win-check-cell {
+      text-align: center;
+      padding-left: 10px;
+      width: 32px;
+    }
+    tbody tr.win-tab-row.nested td.win-sub-title { padding-left: 58px; }
+    tbody tr.win-sub-row td.win-sub-title {
+      max-width: 340px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    tbody tr.win-sub-row td.win-sub-url {
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #888;
+    }
+    .win-group-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 500;
+      color: #444;
+    }
+    .win-color-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 1px solid rgba(0,0,0,0.1);
+      flex-shrink: 0;
+    }
+
+    /* ── Window row close button ── */
+    .btn-row-close {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #cc3333;
+      font-size: 14px;
+      padding: 0 4px;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    tbody tr.window-row:hover .btn-row-close { opacity: 1; }
+
+    /* ── Window expand toggle ── */
+    .win-expand-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0 4px;
+      font-size: 11px;
+      color: #666;
+    }
+    .win-expand-btn:hover { color: #333; }
+
+    /* ── Merge bar hint ── */
+    .merge-hint { font-size: 11px; color: #888; }
+    .merge-hint.error { color: #cc3333; }
+
+    /* ── Picker rows blocked by the incognito boundary ── */
+    .cg-tab-row.blocked {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .cg-tab-row.blocked:hover { background: none; }
   </style>
 </head>
 <body>
@@ -439,7 +569,14 @@
   <div class="header">
     <button class="btn-back" id="btn-back">← Back</button>
     <h1>Group Control Panel</h1>
+    <div class="view-toggle">
+      <button class="view-tab active" id="tab-groups-view">Groups</button>
+      <button class="view-tab" id="tab-windows-view">Windows</button>
+    </div>
   </div>
+
+  <!-- ══ Groups view ══ -->
+  <div class="view visible" id="groups-view">
 
   <!-- Merge mode config -->
   <div class="merge-config">
@@ -506,6 +643,53 @@
     <span class="status-line" id="status"></span>
   </div>
 
+  </div><!-- /#groups-view -->
+
+  <!-- ══ Windows view ══ -->
+  <div class="view" id="windows-view">
+
+    <div class="merge-config">
+      <span class="merge-config-label">Merge into:</span>
+      <select class="move-select" id="win-merge-target" disabled
+              title="Which of the selected windows everything ends up in"></select>
+      <span class="merge-hint" id="win-merge-hint"></span>
+      <span class="merge-hint" id="win-incognito-note" style="display:none">
+        Incognito windows are hidden — enable “Allow in Incognito” for SuperChrome
+        at chrome://extensions to manage them.
+      </span>
+    </div>
+
+    <div class="table-wrapper">
+      <div class="empty-state" id="win-empty-state" style="display:none">No windows found.</div>
+      <table id="windows-table">
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="win-select-all" title="Select all windows"></th>
+            <th>Window</th>
+            <th>Tabs</th>
+            <th>Groups</th>
+            <th title="Collapsed / Expanded">↕</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="windows-body"></tbody>
+      </table>
+    </div>
+
+    <div class="action-bar">
+      <button class="btn" id="btn-new-window" title="Create a new window from hand-picked tabs">+ New Window</button>
+      <button class="btn" id="btn-merge-windows" disabled title="Select 2+ windows to merge into one">Merge</button>
+      <select class="move-select" id="win-move-select" disabled
+              title="Move the checked tabs to another window. Tabs that belong to a group leave that group.">
+        <option value="">Move tabs to…</option>
+      </select>
+      <button class="btn" id="btn-suspend-windows" disabled title="Unload every non-active tab in the selected windows">Suspend</button>
+      <button class="btn danger" id="btn-close-windows" disabled title="Close the selected windows and every tab in them">Close</button>
+      <span class="status-line" id="win-status"></span>
+    </div>
+
+  </div><!-- /#windows-view -->
+
   <!-- Bulk-delete confirm overlay -->
   <div class="confirm-overlay" id="confirm-overlay">
     <div class="confirm-box">
@@ -533,6 +717,23 @@
         <span class="status-line" id="cg-status"></span>
         <button class="btn" id="cg-cancel">Cancel</button>
         <button class="btn primary" id="cg-create" disabled>Create Group</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create-window-from-tabs overlay -->
+  <div class="creategroup-overlay" id="newwindow-overlay">
+    <div class="creategroup-box">
+      <h2>Create window from tabs</h2>
+      <div class="cg-controls">
+        <span class="cg-target-label">Pick the tabs to move into a new window.</span>
+      </div>
+      <div class="tab-pick-list" id="nw-tab-list"></div>
+      <div class="btn-row">
+        <span class="status-line" id="nw-status"></span>
+        <button class="btn" id="nw-empty" title="Open a new empty window instead">Empty window</button>
+        <button class="btn" id="nw-cancel">Cancel</button>
+        <button class="btn primary" id="nw-create" disabled>Create Window</button>
       </div>
     </div>
   </div>
