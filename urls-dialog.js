@@ -233,85 +233,21 @@ async function openExport() {
     return;
   }
 
+  // The background owns the job so it survives this popup closing; the reply
+  // only arrives once every batch has been opened.
+  elements.btnOpen.disabled = true;
+  setStatus('Opening URLs...');
+
   try {
-    let totalOpened = 0;
-    let currentWindow = null;
-
-    try {
-      currentWindow =
-          await chrome.windows.getLastFocused({windowTypes: ['normal']});
-    } catch (error) {
-      const fallbackWindow =
-          await chrome.windows.create({url: 'about:blank', focused: false});
-      currentWindow = {id: fallbackWindow.id};
-    }
-
-    for (let index = 0; index < parsedWindowBlocks.length; index++) {
-      const items = parsedWindowBlocks[index];
-      let windowId = currentWindow.id;
-      let placeholderTabId = null;
-
-      if (index > 0) {
-        const newWindow =
-            await chrome.windows.create({url: 'about:blank', focused: false});
-        windowId = newWindow.id;
-        placeholderTabId = newWindow.tabs?.[0]?.id || null;
-      }
-
-      const openedTabIds = await openItemsInWindow(items, windowId);
-      totalOpened += openedTabIds.length;
-
-      if (placeholderTabId && openedTabIds.length) {
-        await chrome.tabs.remove(placeholderTabId).catch(() => {});
-      }
-    }
-
-    setStatus(`Opened ${totalOpened} URL${totalOpened === 1 ? '' : 's'}.`);
+    const result = await chrome.runtime.sendMessage(
+        {action: 'openUrls', windows: parsedWindowBlocks});
+    setStatus(result.message, result.hasFailures);
   } catch (error) {
     console.error('Failed to open URLs:', error);
     setStatus('Failed to open one or more URLs.', true);
+  } finally {
+    elements.btnOpen.disabled = false;
   }
-}
-
-async function openItemsInWindow(items, windowId) {
-  const openedTabIds = [];
-
-  for (const item of items) {
-    if (item.type === 'tab') {
-      const tab = await chrome.tabs.create(
-          {windowId: windowId, url: item.url, active: false});
-      openedTabIds.push(tab.id);
-      continue;
-    }
-
-    if (item.type === 'group') {
-      const groupTabIds = [];
-
-      for (const url of item.urls) {
-        const tab = await chrome.tabs.create(
-            {windowId: windowId, url: url, active: false});
-        groupTabIds.push(tab.id);
-        openedTabIds.push(tab.id);
-      }
-
-      if (!groupTabIds.length) continue;
-
-      const groupId = await chrome.tabs.group({tabIds: groupTabIds});
-      const updateProperties = {};
-      if (item.title) {
-        updateProperties.title = item.title;
-      }
-      if (item.color && VALID_TAB_GROUP_COLORS.has(item.color)) {
-        updateProperties.color = item.color;
-      }
-
-      if (Object.keys(updateProperties).length > 0) {
-        await chrome.tabGroups.update(groupId, updateProperties);
-      }
-    }
-  }
-
-  return openedTabIds;
 }
 
 function splitWindowBlocks(text) {

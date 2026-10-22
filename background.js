@@ -162,6 +162,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({success: true});
     return true;
   }
+
+  if (request.action === 'openUrls') {
+    openUrlsJob(request.windows).then(sendResponse);
+    return true;  // Keep the message channel open for async response
+  }
 });
 
 // Initial setup
@@ -506,6 +511,244 @@ async function activateGroupControlPanel() {
   chrome.action.setPopup({popup: 'groups-dialog.html'});
   chrome.action.openPopup();
   chrome.action.setPopup({popup: ''});
+}
+
+// --- Open URLs (URL manager "Open") -------------------------------------------
+//
+// Opening a large export at once loads every page together. Instead the first
+// batch loads normally, and every later tab is opened one at a time and
+// discarded as soon as Chrome has its URL. A batch ends when all its tabs are
+// done or OPEN_BATCH_TIMEOUT_MS has passed, whichever comes first; tabs a
+// batch didn't reach in time roll into the next one.
+
+const OPEN_BATCH_SIZE = 10;
+const OPEN_BATCH_TIMEOUT_MS = 5000;
+
+/**
+ * `windowBlocks` is the URL manager's parsed export: one array of items per
+ * window, each item `{type: 'tab', url}` or `{type: 'group', urls, title,
+ * color}`. Block 0 opens in the last focused window, the rest in new windows.
+ */
+async function openUrlsJob(windowBlocks) {
+  const tasks = [];
+  windowBlocks.forEach((items, windowIndex) => {
+    for (const item of items) {
+      if (item.type === 'tab') {
+        tasks.push({windowIndex, url: item.url, group: null});
+      } else if (item.type === 'group') {
+        for (const url of item.urls) {
+          tasks.push({windowIndex, url, group: item});
+        }
+      }
+    }
+  });
+
+  const job = {
+    windowIds: {},
+    placeholderTabIds: {},
+    groupIds: new Map(),
+    opened: 0,
+    loaded: 0,
+    suspended: 0,
+    unsuspended: 0,
+    failedToOpen: 0
+  };
+
+  // First batch: open them all, then wait for them to finish loading.
+  let next = 0;
+  let deadline = Date.now() + OPEN_BATCH_TIMEOUT_MS;
+  const loads = [];
+  while (next < tasks.length && next < OPEN_BATCH_SIZE) {
+    const tab = await openTask(job, tasks[next++]);
+    if (!tab) continue;
+    job.loaded++;
+    loads.push(waitForTab(tab.id, isTabLoaded, deadline));
+  }
+  await Promise.all(loads);
+
+  // Later batches: open one tab, discard it, then open the next.
+  while (next < tasks.length) {
+    deadline = Date.now() + OPEN_BATCH_TIMEOUT_MS;
+    const end = Math.min(next + OPEN_BATCH_SIZE, tasks.length);
+
+    while (next < end && Date.now() < deadline) {
+      const tab = await openTask(job, tasks[next++]);
+      if (!tab) continue;
+
+      // A new window's first tab is made active, and Chrome won't discard the
+      // active tab, so it's left to load.
+      if (tab.active) {
+        job.loaded++;
+        continue;
+      }
+
+      if (await suspendWhenCommitted(tab.id, deadline)) {
+        job.suspended++;
+      } else {
+        job.unsuspended++;
+      }
+    }
+  }
+
+  const result = summarizeOpenJob(job);
+  notifyOpenResult(result.message);
+  return result;
+}
+
+/** Create one task's tab, its window if needed, and its group membership. */
+async function openTask(job, task) {
+  try {
+    const windowId = await windowForTask(job, task.windowIndex);
+    const tab =
+        await chrome.tabs.create({windowId, url: task.url, active: false});
+    job.opened++;
+
+    // A new window starts with an about:blank tab. Activate the first real
+    // tab before removing it, or Chrome would pick a neighbour to activate,
+    // possibly one already discarded, which would reload it.
+    const placeholderTabId = job.placeholderTabIds[task.windowIndex];
+    if (placeholderTabId) {
+      delete job.placeholderTabIds[task.windowIndex];
+      await chrome.tabs.update(tab.id, {active: true});
+      tab.active = true;
+      await chrome.tabs.remove(placeholderTabId).catch(() => {});
+    }
+
+    if (task.group) {
+      await addTabToGroup(job, task.group, tab.id, windowId);
+    }
+    return tab;
+  } catch (error) {
+    console.error('Super Tool: Failed to open URL', task.url, error);
+    job.failedToOpen++;
+    return null;
+  }
+}
+
+// Windows are created when their first tab is reached, so a block whose tabs
+// all fail to parse never leaves an empty window behind.
+async function windowForTask(job, windowIndex) {
+  if (job.windowIds[windowIndex] !== undefined) {
+    return job.windowIds[windowIndex];
+  }
+
+  if (windowIndex === 0) {
+    try {
+      const current =
+          await chrome.windows.getLastFocused({windowTypes: ['normal']});
+      job.windowIds[0] = current.id;
+      return current.id;
+    } catch (error) {
+      // No normal window open; fall through and create one.
+    }
+  }
+
+  const newWindow =
+      await chrome.windows.create({url: 'about:blank', focused: false});
+  job.windowIds[windowIndex] = newWindow.id;
+  job.placeholderTabIds[windowIndex] = newWindow.tabs?.[0]?.id || null;
+  return newWindow.id;
+}
+
+// A group's tabs can span batches, so the group is created with its first tab
+// and later tabs join it by id.
+async function addTabToGroup(job, group, tabId, windowId) {
+  const groupId = job.groupIds.get(group);
+  if (groupId !== undefined) {
+    await chrome.tabs.group({groupId, tabIds: [tabId]});
+    return;
+  }
+
+  // Without an explicit windowId the group is created in the focused window,
+  // which would pull the tab out of a background window.
+  const newGroupId =
+      await chrome.tabs.group({tabIds: [tabId], createProperties: {windowId}});
+  job.groupIds.set(group, newGroupId);
+
+  const updateProperties = {};
+  if (group.title) updateProperties.title = group.title;
+  if (group.color) updateProperties.color = group.color;
+  if (Object.keys(updateProperties).length > 0) {
+    await chrome.tabGroups.update(newGroupId, updateProperties);
+  }
+}
+
+/**
+ * Discard a freshly created tab once Chrome has committed its URL. Discarding
+ * before that can leave a blank tab that restores to nothing. If `deadline`
+ * passes first, the discard is tried anyway. Resolves true on success.
+ */
+async function suspendWhenCommitted(tabId, deadline) {
+  try {
+    await waitForTab(tabId, isTabUrlCommitted, deadline);
+    await chrome.tabs.discard(tabId);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// While a navigation is pending Chrome reports it in pendingUrl, and url is
+// empty or still the previous document.
+function isTabUrlCommitted(tab) {
+  return Boolean(tab.url) && !tab.pendingUrl;
+}
+
+function isTabLoaded(tab) {
+  return tab.status === 'complete';
+}
+
+/** Resolve once `test(tab)` holds, the tab is gone, or `deadline` passes. */
+function waitForTab(tabId, test, deadline) {
+  return new Promise((resolve) => {
+    let timer = null;
+
+    const finish = () => {
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      resolve();
+    };
+
+    const onUpdated = (updatedId, changeInfo, tab) => {
+      if (updatedId === tabId && test(tab)) finish();
+    };
+
+    // Listen before checking, so an update landing in between isn't missed.
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    timer = setTimeout(finish, Math.max(0, deadline - Date.now()));
+
+    chrome.tabs.get(tabId).then((tab) => {
+      if (test(tab)) finish();
+    }).catch(finish);
+  });
+}
+
+function summarizeOpenJob(job) {
+  const plural = (count) => (count === 1 ? '' : 's');
+  const notes = [];
+  if (job.suspended) notes.push(`${job.suspended} suspended`);
+  if (job.unsuspended) notes.push(`${job.unsuspended} could not be suspended`);
+  if (job.failedToOpen) notes.push(`${job.failedToOpen} failed to open`);
+
+  let message = `Opened ${job.opened} URL${plural(job.opened)}`;
+  if (notes.length) message += ` (${notes.join(', ')})`;
+
+  return {
+    message: `${message}.`,
+    hasFailures: job.unsuspended > 0 || job.failedToOpen > 0,
+    opened: job.opened,
+    loaded: job.loaded,
+    suspended: job.suspended
+  };
+}
+
+function notifyOpenResult(message) {
+  chrome.notifications.create({
+    type: 'basic',
+    title: 'SuperChrome',
+    iconUrl: iconMap['urls-manager'],
+    message
+  });
 }
 
 // Handle any errors
